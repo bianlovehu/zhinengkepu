@@ -1,0 +1,48 @@
+# 多模态客服智能体
+
+## 核心依赖
+
+### API框架
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+### LLM支持
+openai>=1.12.0
+
+### 向量数据库
+chromadb>=0.4.22
+
+### 文档处理
+pypdf>=4.0.0
+python-docx>=1.1.0
+beautifulsoup4>=4.12.0
+
+### 图片处理
+pillow>=10.0.0
+
+### HTTP客户端
+httpx>=0.26.0
+
+### 日志和工具
+python-dotenv>=1.0.0
+tiktoken>=0.5.0
+
+## 可选依赖
+
+### 本地Embedding
+# sentence-transformers>=2.2.0
+
+### Milvus向量库
+# pymilvus>=2.3.0
+
+### Qdrant向量库
+# qdrant-client>=1.7.0
+
+## 开发依赖
+
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+black>=24.0.0
+ruff>=0.1.0

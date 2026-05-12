@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+myenv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vscode/
+knowledge_base/chroma_db/
+knowledge_base/vector_db/
+knowledge_base/processed/image_index.json
+knowledge_base/raw_documents/插图/

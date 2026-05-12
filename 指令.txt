@@ -1,0 +1,13 @@
+
+运行
+python scripts/run_api.py
+
+重新构建知识库
+python scripts/build_knowledge_base.py
+
+测试S
+{
+  "images":null,
+  "question": "我的DCB107电钻指示灯闪烁是什么意思？",
+  "session_id": "kf_session_889900"
+}

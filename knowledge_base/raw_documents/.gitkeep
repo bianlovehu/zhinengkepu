@@ -1,0 +1,9 @@
+# 本目录用于存放原始文档
+# 支持格式：TXT, PDF, DOCX, HTML, Markdown
+
+# 建议目录结构：
+# raw_documents/
+# ├── 冰箱手册.pdf
+# ├── 吹风机手册.pdf
+# ├── 电钻使用说明.pdf
+# └── ...
