@@ -13,6 +13,7 @@ from api.models.response import ChatResponse, ResponseData
 from api.middleware.auth import verify_token
 from core.llm.generator import LLMGenerator
 from core.multimodal.intent_recognition import IntentRecognizer
+from core.dialogue.question_router import QuestionRouter
 from core.dialogue.session_manager import SessionManager
 from config import get_settings
 
@@ -103,30 +104,67 @@ async def process_question(
     # 获取会话历史
     session_mgr = SessionManager.get_instance()
     history = session_mgr.get_history(session_id)
+    router = QuestionRouter()
+    pre_route = router.route(question)
 
     # 1. 意图识别
-    intent_recognizer = IntentRecognizer()
-    intent_result = await intent_recognizer.recognize(question, images)
+    if pre_route.route == "policy" and not images:
+        intent_result = {
+            "intent": "policy",
+            "keywords": pre_route.keywords,
+            "product_mentioned": "",
+            "needs_images": False,
+        }
+    else:
+        intent_recognizer = IntentRecognizer()
+        intent_result = await intent_recognizer.recognize(question, images)
 
     logger.info(f"[{request_id}] Intent: {intent_result}")
 
     # 2. RAG检索（传入分级关键词用于权重加成）
     from core.rag.retriever import RAGRetriever
     retriever = RAGRetriever()
-    search_results = await retriever.retrieve(
-        query=question,
-        top_k=settings.TOP_K,
-        need_images=intent_result.get("needs_images", False),
-        keywords_by_level=intent_result.get("keywords", {"high": [], "medium": [], "low": []})
-    )
 
     # 3. 思维链拆解（如需要）
-    from core.dialogue.chain_of_thought import ChainOfThought
-    cot = ChainOfThought()
-    should_decompose, sub_questions = cot.should_decompose(question)
+    route_result = router.route(question, intent_result)
+    logger.info(
+        f"[{request_id}] Route: {route_result.route}, "
+        f"sub_questions={len(route_result.sub_questions)}, "
+        f"needs_images={route_result.needs_images}"
+    )
 
-    if should_decompose:
-        logger.info(f"[{request_id}] Decomposing into {len(sub_questions)} sub-questions")
+    if route_result.route == "policy":
+        search_results = {"texts": [], "images": [], "sub_results": []}
+    elif route_result.route == "mixed":
+        search_results = {"texts": [], "images": [], "sub_results": []}
+        for sub_question in route_result.sub_questions:
+            sub_route = router.route(sub_question, intent_result)
+            sub_results = await retriever.retrieve(
+                query=sub_question,
+                top_k=settings.TOP_K,
+                need_images=sub_route.route != "policy" and sub_route.needs_images,
+                filters=router.filters_for_route(sub_route.route),
+                keywords_by_level=sub_route.keywords,
+                route=sub_route.route
+            )
+            sub_results["question"] = sub_question
+            sub_results["route"] = sub_route.route
+            search_results["sub_results"].append(sub_results)
+            search_results["texts"].extend(sub_results.get("texts", [])[:2])
+            search_results["images"].extend(sub_results.get("images", [])[:2])
+    else:
+        search_results = await retriever.retrieve(
+            query=question,
+            top_k=settings.TOP_K,
+            need_images=route_result.route != "policy" and route_result.needs_images,
+            filters=router.filters_for_route(route_result.route),
+            keywords_by_level=route_result.keywords,
+            route=route_result.route
+        )
+
+    image_ids = [img.get("id") for img in search_results.get("images", [])]
+    if image_ids:
+        logger.info(f"[{request_id}] Retrieved image ids: {image_ids}")
 
     # 4. 答案生成
     generator = LLMGenerator()
@@ -135,15 +173,21 @@ async def process_question(
         context=search_results,
         history=history,
         images=images,
-        intent=intent_result
+        intent={
+            **intent_result,
+            "route": route_result.route,
+            "sub_questions": route_result.sub_questions,
+            "needs_images": route_result.needs_images,
+        }
     )
 
     # 5. 幻觉检测（可选）
-    from core.llm.hallucination_check import HallucinationChecker
-    checker = HallucinationChecker()
-    is_valid = await checker.check(answer, search_results)
+    if route_result.route != "policy" and search_results.get("texts"):
+        from core.llm.hallucination_check import HallucinationChecker
+        checker = HallucinationChecker()
+        is_valid = await checker.check(answer, search_results)
 
-    if not is_valid:
-        logger.warning(f"[{request_id}] Potential hallucination detected")
+        if not is_valid:
+            logger.warning(f"[{request_id}] Potential hallucination detected")
 
     return answer
