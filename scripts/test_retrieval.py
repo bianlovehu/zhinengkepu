@@ -12,6 +12,9 @@ import sys
 import os
 from typing import List
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import get_settings
@@ -71,11 +74,12 @@ async def test_retrieval(keywords: List[str] = None):
         results = await retriever.retrieve(
             query=keyword,
             top_k=5,
-            need_images=False,
+            need_images=True,
             keywords_by_level=keywords_by_level
         )
 
         texts = results.get("texts", [])
+        images = results.get("images", [])
 
         if not texts:
             print("  [无结果] 没有找到相关内容")
@@ -98,6 +102,16 @@ async def test_retrieval(keywords: List[str] = None):
                 preview = preview.replace('\n', ' ')
                 print(f"    内容: {preview}")
                 print()
+
+        if images:
+            print("  相关图片:")
+            for i, image in enumerate(images[:3], 1):
+                image_id = image.get("id", "")
+                score = image.get("score", 0)
+                description = (image.get("description", "") or "")[:120].replace("\n", " ")
+                print(f"    图片 {i}: {image_id} score={score:.4f} {description}")
+        else:
+            print("  [无图片结果] 没有找到相关图片")
 
     print("\n" + "=" * 70)
     print("测试完成")
@@ -122,11 +136,15 @@ def _extract_keywords_from_query(query: str) -> dict:
     product_keywords = [
         "电钻", "充电器", "电池", "电池包", "电动工具",
         "发电机", "洗碗机", "VR", "头显", "显示器",
-        "电锯", "角磨机", "冲击钻", "螺丝刀", "锯子"
+        "电锯", "角磨机", "冲击钻", "螺丝刀", "锯子",
+        "健身追踪器", "表带", "空调", "冰箱", "相机"
     ]
 
     # 问题词
-    issue_keywords = ["指示灯", "闪烁", "故障", "报警", "错误", "异常", "发热", "噪音", "充电"]
+    issue_keywords = [
+        "指示灯", "闪烁", "故障", "报警", "错误", "异常", "发热", "噪音", "充电",
+        "尺寸", "自清洁", "专用盐", "火花塞"
+    ]
 
     # 通用词
     common_keywords = ["灯", "问题", "怎么", "如何", "什么", "哪个", "哪里", "为什么"]

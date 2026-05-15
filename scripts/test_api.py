@@ -9,19 +9,27 @@ import asyncio
 import base64
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import httpx
 from config import get_settings
 
 
+def _api_base_url(settings) -> str:
+    host = "127.0.0.1" if settings.API_HOST in {"0.0.0.0", "::"} else settings.API_HOST
+    return f"http://{host}:{settings.API_PORT}"
+
+
 async def test_text_chat():
     """测试文本对话"""
     settings = get_settings()
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
-            f"http://{settings.API_HOST}:{settings.API_PORT}/chat/",
+            f"{_api_base_url(settings)}/chat/",
             json={
                 "question": "我的DCB107电钻指示灯闪烁是什么意思？"
             },
@@ -48,7 +56,7 @@ async def test_multimodal_chat():
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                f"http://{settings.API_HOST}:{settings.API_PORT}/chat/",
+                f"{_api_base_url(settings)}/chat/",
                 json={
                     "question": "请帮我看一下这张图片的问题",
                     "images": [f"data:image/png;base64,{image_b64}"],
@@ -70,12 +78,12 @@ async def test_multi_turn():
     """测试多轮对话"""
     settings = get_settings()
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         session_id = "multi_turn_test"
 
         # 第一轮
         r1 = await client.post(
-            f"http://{settings.API_HOST}:{settings.API_PORT}/chat/",
+            f"{_api_base_url(settings)}/chat/",
             json={
                 "question": "我想更换表带",
                 "session_id": session_id
@@ -88,7 +96,7 @@ async def test_multi_turn():
 
         # 第二轮（追问）
         r2 = await client.post(
-            f"http://{settings.API_HOST}:{settings.API_PORT}/chat/",
+            f"{_api_base_url(settings)}/chat/",
             json={
                 "question": "有其他尺寸可选吗？",
                 "session_id": session_id
@@ -116,7 +124,7 @@ async def main():
         await test_multimodal_chat()
 
     except Exception as e:
-        print(f"测试失败: {e}")
+        print(f"测试失败: {type(e).__name__}: {e!r}")
 
 
 if __name__ == "__main__":

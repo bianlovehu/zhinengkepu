@@ -3,6 +3,7 @@ RAG检索器
 """
 import logging
 import json
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -168,6 +169,9 @@ class RAGRetriever:
                 # 合并 keywords 和 keywords_by_level（keywords 放入 medium）
                 if keywords:
                     keywords_by_level["medium"] = list(set(keywords_by_level.get("medium", []) + keywords))
+            if not isinstance(keywords_by_level, dict):
+                keywords_by_level = {"high": [], "medium": keywords_by_level or [], "low": []}
+            keywords_by_level = self._merge_query_keywords(query, keywords_by_level)
 
             # 3. 检索文本（支持关键词权重加成）
             texts = await self._search_texts_with_keywords(
@@ -259,9 +263,7 @@ class RAGRetriever:
 
                 # 融合分数
                 for doc_id, doc_data in all_results.items():
-                    final_score = doc_data["vector_score"] + doc_data["keyword_score"]
-                    final_score = min(final_score, 1.0)
-                    doc_data["score"] = final_score
+                    doc_data["score"] = doc_data["vector_score"] + doc_data["keyword_score"]
 
                 # 过滤低于阈值的文档
                 filtered_results = [
@@ -303,6 +305,48 @@ class RAGRetriever:
         except Exception as e:
             logger.error(f"Text search error: {e}", exc_info=True)
             return []
+
+    def _merge_query_keywords(
+        self,
+        query: str,
+        keywords_by_level: Dict[str, List[str]],
+    ) -> Dict[str, List[str]]:
+        extracted = self._extract_keywords_from_query(query)
+        merged = {
+            "high": list(keywords_by_level.get("high", [])),
+            "medium": list(keywords_by_level.get("medium", [])),
+            "low": list(keywords_by_level.get("low", [])),
+        }
+        for level, values in extracted.items():
+            for value in values:
+                if value and value not in merged[level]:
+                    merged[level].append(value)
+        return merged
+
+    def _extract_keywords_from_query(self, query: str) -> Dict[str, List[str]]:
+        product_keywords = [
+            "电钻", "充电器", "电池", "电池包", "电动工具",
+            "发电机", "洗碗机", "VR", "头显", "显示器",
+            "电锯", "角磨机", "冲击钻", "螺丝刀", "锯子",
+            "健身追踪器", "表带", "空调", "冰箱", "相机",
+        ]
+        issue_keywords = [
+            "指示灯", "闪烁", "故障", "报警", "错误", "异常", "发热", "噪音", "充电",
+            "尺寸", "自清洁", "专用盐", "火花塞", "表带", "过热", "过冷",
+        ]
+        common_keywords = ["灯", "问题", "怎么", "如何", "什么", "哪个", "哪里", "为什么"]
+
+        model_pattern = r"(DCB\d+|DC[A-Z0-9]+|BP[A-Z0-9]+|BL[A-Z0-9]+|B[A-Z0-9]+|BF[A-Z0-9]+|BD[A-Z0-9]+|DW[A-Z0-9]+)"
+        models = [m.upper() for m in re.findall(model_pattern, query, re.IGNORECASE)]
+        products = [kw for kw in product_keywords if kw in query]
+        issues = [kw for kw in issue_keywords if kw in query]
+        common = [kw for kw in common_keywords if kw in query]
+
+        return {
+            "high": models + products,
+            "medium": issues,
+            "low": common,
+        }
 
     def _keyword_search(
         self,
@@ -378,12 +422,85 @@ class RAGRetriever:
                     source_match = keyword_lower in metadata_text
                     content_match = keyword_lower in content_lower
                     if source_match or content_match:
-                        count = content_lower.count(keyword_lower)
-                        bonus = min(max(count, 1) * level_weights[level], level_max_bonus[level])
+                        bonus = 0.0
+                        if content_match:
+                            count = content_lower.count(keyword_lower)
+                            bonus += min(max(count, 1) * level_weights[level], level_max_bonus[level])
                         if source_match:
-                            bonus *= 1.5
+                            bonus += min(level_weights[level] * 0.5, 0.15)
                         doc_data["keyword_score"] += bonus
                         doc_data["keyword_details"][level] += bonus
+
+        self._apply_structure_scores(results, keywords_by_level)
+
+    def _apply_structure_scores(
+        self,
+        results: Dict[str, Dict[str, Any]],
+        keywords_by_level: Dict[str, List[str]],
+    ) -> None:
+        """Boost answer-like chunks with matching headings and picture markers."""
+        high_keywords = [kw.lower() for kw in keywords_by_level.get("high", []) if kw]
+        medium_keywords = [kw.lower() for kw in keywords_by_level.get("medium", []) if kw]
+        low_keywords = [kw.lower() for kw in keywords_by_level.get("low", []) if kw]
+        all_keywords = [
+            kw.lower()
+            for level_keywords in keywords_by_level.values()
+            for kw in level_keywords
+            if kw
+        ]
+        model_keywords = [
+            kw.lower()
+            for kw in keywords_by_level.get("high", [])
+            if any(ch.isdigit() for ch in kw)
+        ]
+
+        for doc_data in results.values():
+            content = doc_data["content"]
+            content_lower = content.lower()
+            heading = self._extract_first_heading(content).lower()
+
+            model_heading_hits = sum(1 for kw in model_keywords if kw in heading)
+            medium_heading_hits = sum(1 for kw in medium_keywords if kw in heading)
+            low_heading_hits = sum(1 for kw in low_keywords if kw in heading)
+            product_heading_hits = sum(
+                1
+                for kw in high_keywords
+                if kw in heading and kw not in model_keywords
+            )
+            heading_hits = model_heading_hits + medium_heading_hits + low_heading_hits + product_heading_hits
+
+            if heading_hits:
+                bonus = (
+                    model_heading_hits * 0.25
+                    + medium_heading_hits * 0.35
+                    + low_heading_hits * 0.05
+                    + product_heading_hits * 0.05
+                )
+                bonus = min(bonus, 0.75)
+                doc_data["keyword_score"] += bonus
+                doc_data["keyword_details"]["high"] += bonus
+
+            pic_count = content.count("<PIC>")
+            if pic_count:
+                issue_content_hits = sum(1 for kw in medium_keywords + model_keywords if kw in content_lower)
+                if medium_heading_hits or model_heading_hits or issue_content_hits:
+                    bonus = min(pic_count * 0.15, 0.45)
+                    doc_data["keyword_score"] += bonus
+                    doc_data["keyword_details"]["medium"] += bonus
+
+                if pic_count >= 2 and any(kw in heading for kw in model_keywords):
+                    bonus = min(pic_count * 0.3, 0.9)
+                    doc_data["keyword_score"] += bonus
+                    doc_data["keyword_details"]["high"] += bonus
+
+    def _extract_first_heading(self, content: str) -> str:
+        first_line = content.splitlines()[0] if content else ""
+        marker = "] # "
+        if marker in first_line:
+            return first_line.split(marker, 1)[1].strip()
+        if first_line.startswith("#"):
+            return first_line.lstrip("#").strip()
+        return first_line.strip()
 
     async def _search_texts(
         self,

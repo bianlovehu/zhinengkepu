@@ -118,6 +118,7 @@ def build_image_contexts(documents, image_dir: Path):
 
     for doc in documents:
         text = doc.content
+        text_lower = text.lower()
         manual_id = doc.metadata.get("manual_id", doc.source)
         for match in re.finditer(r"<PIC>\s*([A-Za-z0-9_\-]+)?|\[PIC:([A-Za-z0-9_\-]+)\]|(Manual\d+_\d+)", text):
             explicit_id = next((g for g in match.groups() if g), None)
@@ -146,6 +147,24 @@ def build_image_contexts(documents, image_dir: Path):
                 ),
             }
 
+        for stem, path in image_files.items():
+            stem_lower = stem.lower()
+            if stem in images or stem_lower not in text_lower:
+                continue
+            pos = text_lower.find(stem_lower)
+            images[stem] = {
+                "image_path": str(path),
+                "image_id": stem,
+                "page_num": None,
+                "manual_id": manual_id,
+                "source": doc.source,
+                "description": (
+                    f"产品手册插图: {path.name}\n"
+                    f"来源: {doc.source}\n"
+                    f"附近正文: {_context_window(text, pos, pos + len(stem))}"
+                ),
+            }
+
     return list(images.values())
 
 
@@ -168,7 +187,7 @@ def _next_image_for_document(doc, pending_by_prefix):
     alias_map = {
         "空调": "air_conditioner",
         "烤箱": "oven",
-        "电钻": "drill",
+        "电钻": "drill0",
         "水泵": "pump",
         "摩托艇": "jetski",
         "洗碗机": "dish_washer",
