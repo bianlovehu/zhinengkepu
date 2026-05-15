@@ -229,7 +229,9 @@ class ImageIndexProgressTracker:
 async def build_knowledge_base(
     docs_dir: str = None,
     images_dir: str = None,
-    clear_existing: bool = False
+    clear_existing: bool = False,
+    skip_images: bool = False,
+    image_limit: int = None
 ):
     """
     构建知识库
@@ -248,6 +250,7 @@ async def build_knowledge_base(
     logger.info(f"📊 重叠大小: {settings.CHUNK_OVERLAP} 字符")
     logger.info(f"💾 向量库路径: {settings.CHROMA_PERSIST_DIR}")
     logger.info(f"📦 Embedding批量大小: {settings.EMBEDDING_BATCH_SIZE}")
+    logger.info(f"⏱️ Embedding请求间隔: {settings.EMBEDDING_REQUEST_INTERVAL} 秒")
 
     if clear_existing:
         clear_existing_indexes(settings)
@@ -336,18 +339,24 @@ async def build_knowledge_base(
         logger.error(f"❌ 添加到向量库失败: {e}")
         return
 
-    # ========== 步骤 4: 索引插图 ==========
-    log_section("步骤 4/5: 索引插图")
-    image_indexer = ImageIndexer()
-
-    image_dir = find_image_directory(docs_dir, images_dir)
-
     total_images = 0
-    if image_dir.exists() and image_dir.is_dir():
+    # ========== 步骤 4: 索引插图 ==========
+    if skip_images:
+        log_section("步骤 4/5: 跳过插图索引")
+        logger.info("已按参数 --skip_images 跳过图片索引，只构建文本知识库。")
+    else:
+        log_section("步骤 4/5: 索引插图")
+        image_indexer = ImageIndexer()
+        image_dir = find_image_directory(docs_dir, images_dir)
+
+    if not skip_images and image_dir.exists() and image_dir.is_dir():
         log_subsection("索引插图文件（文件名 + 文档附近上下文）")
         logger.info(f"📁 插图目录: {image_dir}")
 
         images_to_index = build_image_contexts(documents, image_dir)
+        if image_limit is not None:
+            images_to_index = images_to_index[:max(0, image_limit)]
+            logger.info(f"📊 按 --image_limit 限制本次图片索引数量: {len(images_to_index)}")
         total_image_files = len([f for f in image_dir.iterdir() if f.suffix.lower() in IMAGE_EXTENSIONS])
         logger.info(f"📊 插图目录共有 {total_image_files} 个图片文件")
         logger.info(f"📊 匹配到文档上下文的: {len(images_to_index)} 个")
@@ -370,7 +379,7 @@ async def build_knowledge_base(
             # 显示索引统计
             vector_count = image_indexer.get_collection_count()
             logger.info(f"📊 向量库中图片数量: {vector_count}")
-    else:
+    elif not skip_images:
         logger.warning(f"⚠️  插图目录不存在: {image_dir}")
         logger.info("💡 提示: 如有插图，请确保放在文档目录下的'插图'子文件夹中")
 
@@ -397,6 +406,8 @@ def main():
     parser.add_argument("--docs_dir", "-d", help="文档目录路径")
     parser.add_argument("--clear", "-c", action="store_true", help="清除现有数据")
     parser.add_argument("--images_dir", "-i", help="图片目录路径")
+    parser.add_argument("--skip_images", action="store_true", help="只构建文本知识库，跳过图片索引")
+    parser.add_argument("--image_limit", type=int, help="限制本次索引的图片数量，用于小批量测试")
 
     args = parser.parse_args()
 
@@ -404,7 +415,9 @@ def main():
     asyncio.run(build_knowledge_base(
         docs_dir=args.docs_dir,
         images_dir=args.images_dir,
-        clear_existing=args.clear
+        clear_existing=args.clear,
+        skip_images=args.skip_images,
+        image_limit=args.image_limit
     ))
 
 

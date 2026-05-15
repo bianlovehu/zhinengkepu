@@ -23,7 +23,8 @@ class EmbeddingModel:
         model_name: str = "text-embedding-3-small",
         dimension: int = 1536,
         provider: str = "openai",
-        rate_limit: float = 0.5  # 每次请求间隔（秒）
+        rate_limit: float = 0.5,  # 每次请求间隔（秒）
+        rate_limit_retry_seconds: float = 65.0
     ):
         """
         Args:
@@ -31,11 +32,13 @@ class EmbeddingModel:
             dimension: 向量维度
             provider: 提供商 (openai / local)
             rate_limit: 请求间隔（秒），避免触发API限流
+            rate_limit_retry_seconds: 触发 QPM/429 限流后的等待时间（秒）
         """
         self.model_name = model_name
         self.dimension = dimension
         self.provider = provider
         self.rate_limit = rate_limit
+        self.rate_limit_retry_seconds = rate_limit_retry_seconds
         self._client = None
         self._last_request_time = 0.0
 
@@ -105,9 +108,9 @@ class EmbeddingModel:
             raise RuntimeError("Embedding client not initialized")
 
         # API 请求失败时的重试配置（指数退避）
-        max_retries = 5
+        max_retries = 8
         base_delay = 2.0  # 基础等待时间（秒）
-        max_delay = 30.0  # 最大等待时间
+        max_delay = 120.0  # 最大等待时间
 
         for attempt in range(max_retries):
             try:
@@ -123,6 +126,8 @@ class EmbeddingModel:
             except Exception as e:
                 # 计算指数退避时间
                 delay = min(base_delay * (2 ** attempt), max_delay)
+                if self._is_rate_limit_error(e):
+                    delay = max(delay, self.rate_limit_retry_seconds)
                 logger.warning(f"Batch embedding attempt {attempt + 1}/{max_retries} failed: {e}")
 
                 if attempt < max_retries - 1:
@@ -152,6 +157,23 @@ class EmbeddingModel:
         )
         logger.info(f"Embedding API returned {len(response.data)} results")
         return [item.embedding for item in response.data]
+
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        """识别 OpenAI 兼容接口的 429/QPM 限流错误。"""
+        status_code = getattr(error, "status_code", None)
+        if status_code == 429:
+            return True
+
+        error_text = str(error).lower()
+        rate_limit_markers = (
+            "429",
+            "ratelimit",
+            "rate limit",
+            "qpm",
+            "请求过于频繁",
+            "too many requests",
+        )
+        return any(marker in error_text for marker in rate_limit_markers)
 
     def _embed_local(self, texts: List[str]) -> List[List[float]]:
         """本地模型嵌入"""

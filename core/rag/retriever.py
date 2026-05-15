@@ -36,7 +36,8 @@ class RAGRetriever:
             model_name=self.settings.EMBEDDING_MODEL,
             dimension=self.settings.EMBEDDING_DIMENSION,
             provider="openai",
-            rate_limit=0.3  # API请求间隔0.3秒
+            rate_limit=self.settings.EMBEDDING_REQUEST_INTERVAL,
+            rate_limit_retry_seconds=self.settings.EMBEDDING_RATE_LIMIT_RETRY_SECONDS
         )
         self.vector_store = None
         self._init_vector_store()

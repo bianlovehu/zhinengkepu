@@ -40,7 +40,8 @@ class ImageIndexer:
             model_name=self.settings.EMBEDDING_MODEL,
             dimension=self.settings.EMBEDDING_DIMENSION,
             provider="openai",
-            rate_limit=0.2
+            rate_limit=self.settings.EMBEDDING_REQUEST_INTERVAL,
+            rate_limit_retry_seconds=self.settings.EMBEDDING_RATE_LIMIT_RETRY_SECONDS
         )
         self.vector_store = None
         self._init_vector_store()
@@ -185,15 +186,29 @@ class ImageIndexer:
         logger.info("批量生成 embedding...")
         if descriptions and self.embedding_model:
             # 分批生成 embedding
-            batch_size = 20  # 每批20条
+            batch_size = max(
+                1,
+                min(
+                    self.settings.IMAGE_EMBEDDING_BATCH_SIZE,
+                    self.settings.EMBEDDING_BATCH_SIZE,
+                )
+            )
             all_embeddings = []
             for i in range(0, len(descriptions), batch_size):
                 batch = descriptions[i:i + batch_size]
+                batch_no = i // batch_size + 1
+                total_batches = (len(descriptions) + batch_size - 1) // batch_size
+                logger.info(
+                    f"生成图片 embedding 批次 {batch_no}/{total_batches}: "
+                    f"{len(batch)} 条"
+                )
                 try:
                     batch_emb = await self.embedding_model.embed_batch(batch)
                     all_embeddings.extend(batch_emb)
                 except Exception as e:
                     raise RuntimeError(f"Image embedding batch failed: {e}") from e
+                if i + batch_size < len(descriptions) and self.settings.IMAGE_EMBEDDING_BATCH_DELAY > 0:
+                    await asyncio.sleep(self.settings.IMAGE_EMBEDDING_BATCH_DELAY)
 
         # 第三步：批量存入向量库
         if self.vector_store and all_embeddings:

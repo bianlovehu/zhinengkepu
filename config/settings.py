@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 50
     TOP_K: int = 5
     SIMILARITY_THRESHOLD: float = 0.5
+    EMBEDDING_REQUEST_INTERVAL: float = 2.0  # 两次 embedding 请求之间的最小间隔（秒）
+    EMBEDDING_RATE_LIMIT_RETRY_SECONDS: float = 65.0  # 触发 429/QPM 限流后的等待时间（秒）
+    IMAGE_EMBEDDING_BATCH_SIZE: int = 20  # 图片描述 embedding 批量大小
+    IMAGE_EMBEDDING_BATCH_DELAY: float = 2.0  # 图片 embedding 批次之间的额外等待（秒）
     EMBEDDING_BATCH_SIZE: int = 50  # Embedding批量大小（越大越快，但需注意API限制）
 
     # ============ 向量数据库配置 ============
