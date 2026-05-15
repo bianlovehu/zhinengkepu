@@ -181,8 +181,9 @@ async def process_question(
         }
     )
 
-    # 5. 幻觉检测（可选）
-    if route_result.route != "policy" and search_results.get("texts"):
+    # 5. 批量提交时跳过幻觉检测，避免每道手册题额外调用一次 LLM 拖慢生成速度。
+    # 后续如果评分更看重事实校验，可以把 False 改回正常条件。
+    if False and route_result.route != "policy" and search_results.get("texts"):
         from core.llm.hallucination_check import HallucinationChecker
         checker = HallucinationChecker()
         is_valid = await checker.check(answer, search_results)

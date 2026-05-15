@@ -1,14 +1,15 @@
 """
-Batch-call the /chat API for public contest questions and write submission CSV.
+批量调用 /chat API 生成公开题提交文件。
 
-Usage:
+用法：
     python scripts/run_public_questions.py --limit 20
-    python scripts/run_public_questions.py --input question_public.csv --output submission.csv --concurrency 4
+    python scripts/run_public_questions.py --input question_public.csv --output submission.csv --concurrency 4 --resume
 """
 import argparse
 import asyncio
 import csv
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -23,7 +24,10 @@ import httpx
 from config import get_settings
 
 
-BAD_FALLBACK = "您好，这个问题需要根据订单、商品状态和售后规则判断。请提供订单号、商品照片或视频、物流信息和您的具体诉求，我们会按退换货、维修或补发规则为您处理。"
+BAD_FALLBACK = (
+    "非常抱歉，当前问题需要结合订单状态、商品情况和售后规则进一步核实。"
+    "建议您提供订单号、商品照片或视频、物流信息和具体诉求，客服会按退换货、维修或补发规则为您处理。"
+)
 
 
 def api_base_url(settings) -> str:
@@ -97,13 +101,34 @@ def write_submission(path: Path, rows: List[Dict[str, str]]) -> None:
         writer = csv.DictWriter(f, fieldnames=["id", "ret"])
         writer.writeheader()
         for row in rows:
-            writer.writerow({"id": row["id"], "ret": row["ret"]})
+            writer.writerow({"id": row["id"], "ret": clean_submission_answer(row["ret"])})
+
+
+def clean_submission_answer(answer: str) -> str:
+    """清理影响提交观感的 Markdown 装饰符。"""
+    answer = answer.replace("**", "")
+    answer = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", answer)
+    answer = re.sub(r"(?m)^\s*[-*]\s+", "- ", answer)
+    answer = re.sub(r"\n{3,}", "\n\n", answer)
+    return answer.strip()
 
 
 def write_debug(path: Path, rows: List[Dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_checkpoint(
+    output_path: Path,
+    debug_path: Path | None,
+    questions: List[Dict[str, str]],
+    by_id: Dict[str, Dict[str, str]],
+) -> None:
+    ordered_partial = [by_id[row["id"]] for row in questions if row["id"] in by_id]
+    write_submission(output_path, ordered_partial)
+    if debug_path:
+        write_debug(debug_path, ordered_partial)
 
 
 async def main_async(args) -> None:
@@ -120,6 +145,13 @@ async def main_async(args) -> None:
     ]
     pending = [row for row in questions if row["id"] not in existing or not existing[row["id"]].strip()]
     semaphore = asyncio.Semaphore(max(1, args.concurrency))
+    by_id = {row["id"]: row for row in completed}
+    output_path = Path(args.output)
+    debug_path = Path(args.debug_output) if args.debug_output else None
+
+    if completed:
+        write_checkpoint(output_path, debug_path, questions, by_id)
+        print(f"resumed {len(completed)} rows from {args.output}")
 
     timeout = httpx.Timeout(args.timeout)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -127,18 +159,19 @@ async def main_async(args) -> None:
             ask_one(client, row, base_url, token, semaphore, args.retries)
             for row in pending
         ]
-        results = []
         for idx, coro in enumerate(asyncio.as_completed(tasks), 1):
             result = await coro
-            results.append(result)
+            by_id[result["id"]] = result
             if idx % args.progress_every == 0 or idx == len(tasks):
                 print(f"finished {idx}/{len(tasks)} pending, id={result['id']}, error={result['error'][:80]}")
+            if idx % args.checkpoint_every == 0 or idx == len(tasks):
+                write_checkpoint(output_path, debug_path, questions, by_id)
+                print(f"checkpoint wrote {len(by_id)}/{len(questions)} rows to {args.output}")
 
-    by_id = {row["id"]: row for row in completed + results}
     ordered = [by_id[row["id"]] for row in questions]
-    write_submission(Path(args.output), ordered)
-    if args.debug_output:
-        write_debug(Path(args.debug_output), ordered)
+    write_submission(output_path, ordered)
+    if debug_path:
+        write_debug(debug_path, ordered)
     print(f"wrote {len(ordered)} rows to {args.output}")
 
 
@@ -155,6 +188,7 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--progress-every", type=int, default=10)
+    parser.add_argument("--checkpoint-every", type=int, default=5)
     return parser.parse_args()
 
 
