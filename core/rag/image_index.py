@@ -20,6 +20,21 @@ from core.rag.embedding import EmbeddingModel
 logger = logging.getLogger(__name__)
 
 
+def _to_chroma_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert metadata values to Chroma-supported scalar types."""
+    clean = {}
+    for key, value in metadata.items():
+        if value is None:
+            clean[key] = ""
+        elif isinstance(value, (str, int, float, bool)):
+            clean[key] = value
+        elif isinstance(value, Path):
+            clean[key] = str(value)
+        else:
+            clean[key] = json.dumps(value, ensure_ascii=False)
+    return clean
+
+
 class ImageIndexer:
     """
     图片索引器
@@ -218,13 +233,13 @@ class ImageIndexer:
             embeddings = all_embeddings
             documents = descriptions
             metadatas = [
-                {
+                _to_chroma_metadata({
                     "keywords": ",".join(self._extract_keywords(desc)),
                     "page": img.get("page_num"),
                     "source_file": Path(img["image_path"]).name,
                     "manual_id": img.get("manual_id", ""),
                     "source": img.get("source", ""),
-                }
+                })
                 for img, desc in zip(images, descriptions)
             ]
 
@@ -278,11 +293,11 @@ class ImageIndexer:
                 ids=[image_id],
                 embeddings=[embedding],
                 documents=[description],
-                metadatas=[{
+                metadatas=[_to_chroma_metadata({
                     "keywords": ",".join(keywords),
                     "page": image_info.get("page"),
                     "source_file": image_info.get("source_file")
-                }]
+                })]
             )
 
             logger.debug(f"Added image embedding to vector store: {image_id}")

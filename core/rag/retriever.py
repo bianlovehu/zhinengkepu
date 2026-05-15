@@ -2,6 +2,8 @@
 RAG检索器
 """
 import logging
+import json
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -9,6 +11,21 @@ from config import get_settings
 from core.rag.embedding import EmbeddingModel
 
 logger = logging.getLogger(__name__)
+
+
+def _to_chroma_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert metadata values to Chroma-supported scalar types."""
+    clean = {}
+    for key, value in metadata.items():
+        if value is None:
+            clean[key] = ""
+        elif isinstance(value, (str, int, float, bool)):
+            clean[key] = value
+        elif isinstance(value, Path):
+            clean[key] = str(value)
+        else:
+            clean[key] = json.dumps(value, ensure_ascii=False)
+    return clean
 
 
 @dataclass
@@ -491,7 +508,10 @@ class RAGRetriever:
                         str(doc.get("metadata", {}).get("chunk_id") or f"doc_{i + j}")
                         for j, doc in enumerate(batch)
                     ]
-                    metadatas = [doc.get("metadata", {}) for doc in batch]
+                    metadatas = [
+                        _to_chroma_metadata(doc.get("metadata", {}))
+                        for doc in batch
+                    ]
 
                     collection.add(
                         ids=ids,
